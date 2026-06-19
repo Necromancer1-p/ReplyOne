@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: replyone-db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: replyone
+      MYSQL_USER: replyone_user
+      MYSQL_PASSWORD: replyone_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2
+    container_name: replyone-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mock-ai:
+    build:
+      context: ./mock-ai
+      dockerfile: Dockerfile
+    container_name: replyone-mock-ai
+    restart: always
+    ports:
+      - "8008:8008"
+    environment:
+      - PORT=8008
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/docs"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: replyone-api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=mysql+aiomysql://replyone_user:replyone_password@db:3306/replyone
+      - REDIS_URL=redis://redis:6379/0
+      - AI_SERVICE_URL=http://mock-ai:8008
+      - JWT_SECRET=test_secret_key_change_me_in_production_32_bytes_long_jwt_secret
+      - AES_ENCRYPTION_KEY=test_aes_key_change_me_in_production_32_bytes
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mock-ai:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: replyone-worker
+    restart: always
+    command: celery -A app.worker.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=mysql+aiomysql://replyone_user:replyone_password@db:3306/replyone
+      - REDIS_URL=redis://redis:6379/0
+      - AI_SERVICE_URL=http://mock-ai:8008
+      - JWT_SECRET=test_secret_key_change_me_in_production_32_bytes_long_jwt_secret
+      - AES_ENCRYPTION_KEY=test_aes_key_change_me_in_production_32_bytes
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mock-ai:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+
+volumes:
+  db_data:
+  redis_data:
