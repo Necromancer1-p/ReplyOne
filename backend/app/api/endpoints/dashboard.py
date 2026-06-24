@@ -87,7 +87,7 @@ async def send_agent_message(
     tenant_id = current_user.tenant_id
     # Verify conversation ownership
     conv_result = await db.execute(
-        select(Conversation).where(Conversation.id == conv_id, Conversation.tenant_id == tenant_id)
+        select(Conversation).where(Conversation.id == conv_id, Conversation.tenant_id == tenant_id).options(selectinload(Conversation.customer))
     )
     conv = conv_result.scalars().first()
     if not conv:
@@ -114,6 +114,50 @@ async def send_agent_message(
     await db.commit()
     await db.refresh(msg)
     
+    # Broadcast updates via WebSocket
+    try:
+        from app.core.websocket import publish_websocket_event
+        
+        msg_data = {
+            "id": msg.id,
+            "conversation_id": msg.conversation_id,
+            "direction": msg.direction,
+            "sender_type": msg.sender_type,
+            "sender_user_id": msg.sender_user_id,
+            "content": msg.content,
+            "attachment_url": msg.attachment_url,
+            "external_message_id": msg.external_message_id,
+            "delivery_status": msg.delivery_status,
+            "created_at": msg.created_at.isoformat() if msg.created_at else None,
+            "customer_session_id": conv.customer.external_user_id if conv.customer else None
+        }
+        await publish_websocket_event(tenant_id, "message_created", msg_data)
+
+        cust_data = {
+            "id": conv.customer.id,
+            "display_name": conv.customer.display_name,
+            "avatar_url": conv.customer.avatar_url,
+            "phone": conv.customer.phone,
+            "external_user_id": conv.customer.external_user_id
+        } if conv.customer else None
+
+        conv_data = {
+            "id": conv.id,
+            "customer_id": conv.customer_id,
+            "channel_id": conv.channel_id,
+            "channel": conv.channel,
+            "status": conv.status,
+            "assigned_agent_id": conv.assigned_agent_id,
+            "ai_active": conv.ai_active,
+            "last_message_at": conv.last_message_at.isoformat() if conv.last_message_at else None,
+            "created_at": conv.created_at.isoformat() if conv.created_at else None,
+            "customer": cust_data,
+            "last_message": msg.content
+        }
+        await publish_websocket_event(tenant_id, "conversation_updated", conv_data)
+    except Exception as e:
+        logger.error(f"Failed to publish WebSocket events in send_agent_message: {e}", exc_info=True)
+        
     logger.info(f"Agent {current_user.id} replied to conversation {conv_id}. Handed over from AI.")
     return msg
 
@@ -151,6 +195,35 @@ async def update_conversation(
     msg_res = await db.execute(msg_query)
     last_msg = msg_res.scalars().first()
     
+    # Broadcast updates via WebSocket
+    try:
+        from app.core.websocket import publish_websocket_event
+        
+        cust_data = {
+            "id": conv.customer.id,
+            "display_name": conv.customer.display_name,
+            "avatar_url": conv.customer.avatar_url,
+            "phone": conv.customer.phone,
+            "external_user_id": conv.customer.external_user_id
+        } if conv.customer else None
+
+        conv_data = {
+            "id": conv.id,
+            "customer_id": conv.customer_id,
+            "channel_id": conv.channel_id,
+            "channel": conv.channel,
+            "status": conv.status,
+            "assigned_agent_id": conv.assigned_agent_id,
+            "ai_active": conv.ai_active,
+            "last_message_at": conv.last_message_at.isoformat() if conv.last_message_at else None,
+            "created_at": conv.created_at.isoformat() if conv.created_at else None,
+            "customer": cust_data,
+            "last_message": last_msg.content if last_msg else None
+        }
+        await publish_websocket_event(tenant_id, "conversation_updated", conv_data)
+    except Exception as e:
+        logger.error(f"Failed to publish WebSocket events in update_conversation: {e}", exc_info=True)
+        
     conv_resp = ConversationResponse.from_orm(conv)
     if last_msg:
         conv_resp.last_message = last_msg.content

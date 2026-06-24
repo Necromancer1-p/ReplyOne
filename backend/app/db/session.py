@@ -1,5 +1,8 @@
 import os
 import logging
+from dotenv import load_dotenv
+load_dotenv()
+
 from contextvars import ContextVar
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
@@ -11,15 +14,12 @@ logger = logging.getLogger("replyone.db")
 # Context variable to hold the current tenant ID for request scope
 tenant_context: ContextVar[int | None] = ContextVar("tenant_context", default=None)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///replyone.db")
-
-# Fallback to standard SQLite if MySQL url is not set or local run is active
-if not DATABASE_URL.startswith("mysql"):
-    # Use SQLite async driver
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
     DATABASE_URL = "sqlite+aiosqlite:///../replyone.db"
     logger.info(f"Using SQLite database fallback: {DATABASE_URL}")
 else:
-    logger.info(f"Using MySQL database: {DATABASE_URL}")
+    logger.info(f"Using database: {DATABASE_URL}")
 
 # Create engine with appropriate parameters
 connect_args = {}
@@ -41,12 +41,18 @@ engine = create_async_engine(
 @event.listens_for(engine.sync_engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     if "sqlite" in DATABASE_URL:
+        dbapi_connection.isolation_level = None
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.close()
-        logger.debug("Enforced SQLite foreign keys, WAL mode, and normal sync")
+        logger.info("Enforced SQLite foreign keys, WAL mode, normal sync, and isolation_level=None")
+
+@event.listens_for(engine.sync_engine, "begin")
+def do_begin(conn):
+    if "sqlite" in DATABASE_URL:
+        conn.exec_driver_sql("BEGIN IMMEDIATE")
 
 # Session maker
 AsyncSessionLocal = async_sessionmaker(

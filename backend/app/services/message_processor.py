@@ -1,6 +1,7 @@
 import logging
 import datetime
 import os
+import json
 import httpx
 import asyncio
 from sqlalchemy.future import select
@@ -20,7 +21,12 @@ async def process_inbound_message(event_id: int):
     """Processes an enqueued inbound webhook event."""
     await db_write_lock.acquire()
     try:
-        logger.info(f"Background task: starting processing for webhook event ID: {event_id}")
+        await _process_inbound_message_impl(event_id)
+    finally:
+        db_write_lock.release()
+
+async def _process_inbound_message_impl(event_id: int):
+    logger.info(f"Background task: starting processing for webhook event ID: {event_id}")
     
     async with AsyncSessionLocal() as db:
         try:
@@ -219,6 +225,45 @@ async def process_inbound_message(event_id: int):
             await db.flush()
             logger.info(f"Saved message ID {message.id} to conversation {conversation.id}")
 
+            # Publish event to WebSocket clients
+            from app.core.websocket import publish_websocket_event
+            msg_data = {
+                "id": message.id,
+                "conversation_id": message.conversation_id,
+                "direction": message.direction,
+                "sender_type": message.sender_type,
+                "sender_user_id": message.sender_user_id,
+                "content": message.content,
+                "attachment_url": message.attachment_url,
+                "external_message_id": message.external_message_id,
+                "delivery_status": message.delivery_status,
+                "created_at": message.created_at.isoformat() if message.created_at else None,
+                "customer_session_id": customer.external_user_id
+            }
+            await publish_websocket_event(tenant_id, "message_created", msg_data)
+
+            # Construct conversation update payload matching ConversationResponse
+            conv_data = {
+                "id": conversation.id,
+                "customer_id": conversation.customer_id,
+                "channel_id": conversation.channel_id,
+                "channel": conversation.channel,
+                "status": conversation.status,
+                "assigned_agent_id": conversation.assigned_agent_id,
+                "ai_active": conversation.ai_active,
+                "last_message_at": conversation.last_message_at.isoformat() if conversation.last_message_at else None,
+                "created_at": conversation.created_at.isoformat() if conversation.created_at else None,
+                "customer": {
+                    "id": customer.id,
+                    "display_name": customer.display_name,
+                    "avatar_url": customer.avatar_url,
+                    "phone": customer.phone,
+                    "external_user_id": customer.external_user_id
+                },
+                "last_message": message.content
+            }
+            await publish_websocket_event(tenant_id, "conversation_updated", conv_data)
+
             # 6. Evaluate AI Logic & Call AI Inference
             # We only execute AI if AI is enabled globally for tenant AND active on conversation thread
             if tenant.ai_enabled and conversation.ai_active:
@@ -247,8 +292,77 @@ async def process_inbound_message(event_id: int):
                 await db.commit()
             except Exception as commit_err:
                 logger.error(f"Failed to write error state for event {event_id}: {commit_err}")
-    finally:
-        db_write_lock.release()
+
+
+async def query_gemini_model(model_name: str, api_key: str, prompt: str, user_message: str, tone: str) -> dict:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    system_instruction_text = (
+        "You are an AI customer support assistant. Analyze the user message based on the provided business context and return a structured JSON response. "
+        "You must identify the user's intent and draft a suggested reply matching the configured tone.\n\n"
+        f"Business Context:\n{prompt}\n\n"
+        f"Configured Tone: {tone}"
+    )
+    
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": user_message
+                    }
+                ]
+            }
+        ],
+        "systemInstruction": {
+            "parts": [
+                {
+                    "text": system_instruction_text
+                }
+            ]
+        },
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "intent": {
+                        "type": "STRING",
+                        "description": "The classified intent of the user message (e.g., greeting, complaint, order_status, return_request, price_inquiry, availability, compliment, general_inquiry)."
+                    },
+                    "confidence": {
+                        "type": "NUMBER",
+                        "description": "Confidence score of the intent classification from 0.0 to 1.0."
+                    },
+                    "suggested_reply": {
+                        "type": "STRING",
+                        "description": "The drafted auto-reply to the customer using the knowledge base and product catalogue context, matching the configured tone."
+                    }
+                },
+                "required": ["intent", "confidence", "suggested_reply"]
+            }
+        }
+    }
+    
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=15.0
+        )
+        
+    if resp.status_code == 200:
+        resp_json = resp.json()
+        try:
+            text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+            return json.loads(text)
+        except (KeyError, IndexError, json.JSONDecodeError) as parse_err:
+            logger.error(f"Error parsing Gemini response content for {model_name}: {parse_err}, Response: {resp_json}")
+            raise Exception("Invalid Gemini response structure")
+    else:
+        logger.error(f"Gemini API returned error for model {model_name}: {resp.status_code} - {resp.text}")
+        raise Exception(f"Gemini API error {resp.status_code}")
 
 async def trigger_ai_response(
     db: AsyncSessionLocal, 
@@ -257,11 +371,10 @@ async def trigger_ai_response(
     inbound_message: Message,
     settings: ShopSettings
 ):
-    """Triggers mock AI response logic and enqueues or auto-replies."""
-    logger.info(f"Triggering AI response for conversation {conversation.id}")
+    """Triggers real Gemini AI response logic with multi-model failover."""
+    logger.info(f"Triggering Gemini AI response for conversation {conversation.id}")
     
-    # Construct Mock System Prompt by gathering FAQ and Product details
-    # This matches RAG / Context injection in TRD
+    # Construct System Prompt by gathering FAQ and Product details
     faq_text = ""
     result = await db.execute(select(KnowledgeBaseEntry).where(KnowledgeBaseEntry.tenant_id == tenant_id, KnowledgeBaseEntry.is_active == True))
     faqs = result.scalars().all()
@@ -276,30 +389,37 @@ async def trigger_ai_response(
         
     system_prompt = f"Knowledge base FAQs:\n{faq_text}\nProduct catalogue:\n{prod_text}\n"
     
-    ai_service_url = os.getenv("AI_SERVICE_URL", "http://localhost:8008")
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    tone = settings.ai_tone if settings else "balanced"
     
-    logger.debug(f"System prompt prepared. Calling mock-ai service at: {ai_service_url}/infer")
+    ai_data = None
+    resolved_model = None
     
-    try:
-        # Call the Mock AI service
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{ai_service_url}/infer",
-                json={
-                    "system_prompt": system_prompt,
-                    "user_message": inbound_message.content,
-                    "max_tokens": 256,
-                    "temperature": 0.7
-                },
-                timeout=8.0
-            )
-            
-        if resp.status_code == 200:
-            ai_data = resp.json()
+    if not gemini_api_key:
+        logger.error("GEMINI_API_KEY environment variable is not configured. Directing message to human agent queue.")
+    else:
+        # 1. Attempt Primary model: gemini-2.5-flash
+        try:
+            logger.info("Attempting primary LLM model: gemini-2.5-flash")
+            ai_data = await query_gemini_model("gemini-2.5-flash", gemini_api_key, system_prompt, inbound_message.content, tone)
+            resolved_model = "gemini-2.5-flash"
+        except Exception as e_primary:
+            logger.warning(f"Primary model gemini-2.5-flash failed: {e_primary}. Attempting failover to secondary model...")
+            # 2. Attempt Fallback model: gemini-1.5-flash
+            try:
+                ai_data = await query_gemini_model("gemini-1.5-flash", gemini_api_key, system_prompt, inbound_message.content, tone)
+                resolved_model = "gemini-1.5-flash"
+                logger.info("Failover succeeded with secondary LLM model: gemini-1.5-flash")
+            except Exception as e_secondary:
+                logger.critical(f"All LLM models failed. Primary error: {e_primary}, Secondary error: {e_secondary}")
+                ai_data = None
+                
+    if ai_data:
+        try:
             intent = ai_data["intent"]
-            confidence = ai_data["confidence"]
+            confidence = float(ai_data["confidence"])
             suggested_reply = ai_data["suggested_reply"]
-            logger.info(f"AI response received. Intent: {intent}, Confidence: {confidence}")
+            logger.info(f"AI response received. Model: {resolved_model}, Intent: {intent}, Confidence: {confidence}")
             
             # Log AI transaction
             ai_log = AIResponseLog(
@@ -308,15 +428,13 @@ async def trigger_ai_response(
                 intent_classified=intent,
                 sentiment="neutral" if intent != "complaint" else "urgent",
                 confidence_score=confidence,
-                model_name="mistral-7b-mock",
-                latency_ms=120
+                model_name=resolved_model,
+                latency_ms=150
             )
             db.add(ai_log)
             
             # Decide: Auto-reply or Escalate
-            # Auto-reply if confidence >= threshold (from settings) AND intent is not complaint/urgent
             threshold = float(settings.ai_confidence_threshold) if settings else 0.700
-            
             should_auto_reply = (confidence >= threshold) and (intent != "complaint")
             
             if should_auto_reply:
@@ -331,19 +449,95 @@ async def trigger_ai_response(
                     delivery_status="sent"
                 )
                 db.add(outbound)
+                await db.flush()
                 
                 # Mock platform API send call
                 logger.info(f"Outbound API call mock: Sent '{suggested_reply}' to platform endpoint.")
+
+                # Publish event to WebSocket clients
+                from app.core.websocket import publish_websocket_event
+                from app.models.models import Customer
+                
+                cust_result = await db.execute(select(Customer).where(Customer.id == conversation.customer_id))
+                customer = cust_result.scalars().first()
+
+                outbound_data = {
+                    "id": outbound.id,
+                    "conversation_id": outbound.conversation_id,
+                    "direction": outbound.direction,
+                    "sender_type": outbound.sender_type,
+                    "sender_user_id": outbound.sender_user_id,
+                    "content": outbound.content,
+                    "attachment_url": outbound.attachment_url,
+                    "external_message_id": outbound.external_message_id,
+                    "delivery_status": outbound.delivery_status,
+                    "created_at": outbound.created_at.isoformat() if outbound.created_at else None,
+                    "customer_session_id": customer.external_user_id if customer else None
+                }
+                await publish_websocket_event(tenant_id, "message_created", outbound_data)
+
+                cust_data = {
+                    "id": customer.id,
+                    "display_name": customer.display_name,
+                    "avatar_url": customer.avatar_url,
+                    "phone": customer.phone,
+                    "external_user_id": customer.external_user_id
+                } if customer else None
+
+                conv_data = {
+                    "id": conversation.id,
+                    "customer_id": conversation.customer_id,
+                    "channel_id": conversation.channel_id,
+                    "channel": conversation.channel,
+                    "status": conversation.status,
+                    "assigned_agent_id": conversation.assigned_agent_id,
+                    "ai_active": conversation.ai_active,
+                    "last_message_at": conversation.last_message_at.isoformat() if conversation.last_message_at else None,
+                    "created_at": conversation.created_at.isoformat() if conversation.created_at else None,
+                    "customer": cust_data,
+                    "last_message": outbound.content
+                }
+                await publish_websocket_event(tenant_id, "conversation_updated", conv_data)
+
             else:
                 logger.info(f"Auto-reply conditions not met. Escalating to human queue. Intent: {intent}")
                 conversation.status = "escalated" if intent == "complaint" else "pending"
                 db.add(conversation)
-        else:
-            logger.error(f"Mock AI server returned error: {resp.status_code}")
-            raise Exception("AI server error")
-            
-    except Exception as e:
-        logger.error(f"AI Inference failure: {e}. Defaulting to human takeover.", exc_info=True)
-        # Fail-safe escalation: default to human queue
+                await db.flush()
+
+                # Publish conversation update
+                from app.core.websocket import publish_websocket_event
+                from app.models.models import Customer
+                cust_result = await db.execute(select(Customer).where(Customer.id == conversation.customer_id))
+                customer = cust_result.scalars().first()
+                cust_data = {
+                    "id": customer.id,
+                    "display_name": customer.display_name,
+                    "avatar_url": customer.avatar_url,
+                    "phone": customer.phone,
+                    "external_user_id": customer.external_user_id
+                } if customer else None
+
+                conv_data = {
+                    "id": conversation.id,
+                    "customer_id": conversation.customer_id,
+                    "channel_id": conversation.channel_id,
+                    "channel": conversation.channel,
+                    "status": conversation.status,
+                    "assigned_agent_id": conversation.assigned_agent_id,
+                    "ai_active": conversation.ai_active,
+                    "last_message_at": conversation.last_message_at.isoformat() if conversation.last_message_at else None,
+                    "created_at": conversation.created_at.isoformat() if conversation.created_at else None,
+                    "customer": cust_data,
+                    "last_message": inbound_message.content
+                }
+                await publish_websocket_event(tenant_id, "conversation_updated", conv_data)
+        except Exception as handler_err:
+            logger.error(f"Error handling Gemini LLM response payload: {handler_err}", exc_info=True)
+            conversation.status = "pending"
+            db.add(conversation)
+    else:
+        # Failover to human takeover directly (no mock-ai fallback)
+        logger.warning("No LLM response obtained. Defaulting conversation to pending human takeover.")
         conversation.status = "pending"
         db.add(conversation)

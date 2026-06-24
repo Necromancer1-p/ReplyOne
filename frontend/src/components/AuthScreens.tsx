@@ -22,6 +22,15 @@ export const AuthScreens: React.FC<AuthScreensProps> = ({ onSuccess }) => {
     setLoading(true);
 
     try {
+      if (!isLogin) {
+        if (password.length < 8) {
+          throw new Error('Password must be at least 8 characters long.');
+        }
+        if (!businessName.trim()) {
+          throw new Error('Business name is required.');
+        }
+      }
+
       if (isLogin) {
         // Login endpoint
         const response = await api.post<{

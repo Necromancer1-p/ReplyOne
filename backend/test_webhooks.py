@@ -1,7 +1,8 @@
 import httpx
 import time
 import logging
-from sqlalchemy import create_engine, select
+import uuid
+from sqlalchemy import create_engine, select, event
 from sqlalchemy.orm import sessionmaker
 
 # Import database session & models to verify DB state
@@ -17,15 +18,33 @@ BASE_URL = "http://127.0.0.1:8000"
 
 # Synchronous connection to SQLite db for assertion checks
 db_path = "../replyone.db" # Relative to backend folder
-engine = create_engine(f"sqlite:///{db_path}", poolclass=NullPool)
+engine = create_engine(
+    f"sqlite:///{db_path}", 
+    poolclass=NullPool,
+    connect_args={"timeout": 30.0}
+)
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    dbapi_connection.isolation_level = None
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
+
+@event.listens_for(engine, "begin")
+def do_begin(conn):
+    conn.exec_driver_sql("BEGIN IMMEDIATE")
+
 SessionLocal = sessionmaker(bind=engine)
 
 def setup_channel_and_test():
     with httpx.Client() as client:
         # 1. Register tenant
         logger.info("Registering tenant...")
+        email = f"owner_{uuid.uuid4().hex[:6]}@example.com"
         reg_payload = {
-            "email": "owner@example.com",
+            "email": email,
             "password": "securepassword123",
             "business_name": "Ravi Boutique"
         }
@@ -152,7 +171,7 @@ def setup_channel_and_test():
 
         # Wait a moment for background processing task to finish
         logger.info("Waiting for background task to process messages...")
-        time.sleep(2)
+        time.sleep(4)
 
         # 5. Assert Database State
         session = SessionLocal()

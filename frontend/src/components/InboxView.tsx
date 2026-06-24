@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../utils/api';
+import { useAuthStore } from '../store/useAuthStore';
 import { 
   MessageSquare, Bot, AlertCircle, CheckCircle, 
   Send, Sparkles, RefreshCw, Smartphone, Globe, Instagram, Loader2
@@ -40,6 +41,7 @@ interface Message {
 }
 
 export const InboxView: React.FC = () => {
+  const token = useAuthStore((state) => state.token);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConv, setActiveConv] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -49,6 +51,12 @@ export const InboxView: React.FC = () => {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Store activeConv in a ref to avoid stale closures in WebSocket event listeners
+  const activeConvRef = useRef<Conversation | null>(null);
+  useEffect(() => {
+    activeConvRef.current = activeConv;
+  }, [activeConv]);
 
   // Poll conversations & active messages
   const fetchConversations = async (silent = false) => {
@@ -84,16 +92,94 @@ export const InboxView: React.FC = () => {
     fetchConversations();
   }, [statusFilter]);
 
-  // Periodic polling for real-time inbox feel
+  // Establish WebSocket connection for real-time messaging updates
   useEffect(() => {
-    const interval = setInterval(() => {
-      fetchConversations(true);
-      if (activeConv) {
-        fetchMessages(activeConv.id, true);
+    if (!token) return;
+    
+    let socket: WebSocket | null = null;
+    let reconnectTimeout: number | null = null;
+    
+    const connect = () => {
+      const wsUrl = `ws://localhost:8000/ws?token=${token}`;
+      console.log('Connecting to WebSocket...');
+      socket = new WebSocket(wsUrl);
+      
+      socket.onopen = () => {
+        console.log('WebSocket connected successfully.');
+      };
+      
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          const { type, data } = payload;
+          console.log('WebSocket event received:', type, data);
+          
+          if (type === 'message_created') {
+            const currentActive = activeConvRef.current;
+            // Append message to current thread if it matches active conversation
+            if (currentActive && data.conversation_id === currentActive.id) {
+              setMessages(prev => {
+                if (prev.some(m => m.id === data.id)) return prev;
+                return [...prev, data];
+              });
+            }
+          } else if (type === 'conversation_updated') {
+            // Update the conversation in list
+            setConversations(prev => {
+              const list = [...prev];
+              const idx = list.findIndex(c => c.id === data.id);
+              if (idx !== -1) {
+                // If it belongs to current filter, update it and move to top
+                const updated = {
+                  ...list[idx],
+                  ...data
+                };
+                list.splice(idx, 1);
+                list.unshift(updated);
+                
+                // Also update activeConv if it's currently selected
+                setActiveConv(prevActive => {
+                  if (prevActive && prevActive.id === data.id) {
+                    return { ...prevActive, ...data };
+                  }
+                  return prevActive;
+                });
+              } else {
+                // If conversation isn't in list (e.g. status changed), we fetch to refresh the list
+                fetchConversations(true);
+              }
+              return list;
+            });
+          }
+        } catch (err) {
+          console.error('Error handling WebSocket message:', err);
+        }
+      };
+      
+      socket.onclose = (event) => {
+        console.log(`WebSocket connection closed: ${event.reason}. Reconnecting in 3s...`);
+        if (event.code !== 1008) { // Don't reconnect if policy violation (auth failure)
+          reconnectTimeout = window.setTimeout(connect, 3000);
+        }
+      };
+      
+      socket.onerror = (err) => {
+        console.error('WebSocket encountered an error:', err);
+        socket?.close();
+      };
+    };
+    
+    connect();
+    
+    return () => {
+      if (socket) {
+        socket.close();
       }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [activeConv, statusFilter]);
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+      }
+    };
+  }, [token]);
 
   useEffect(() => {
     if (activeConv) {
