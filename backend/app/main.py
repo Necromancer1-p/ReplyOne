@@ -1,7 +1,12 @@
 import logging
+import asyncio
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.endpoints import auth, webhooks, dashboard
+from app.core.websocket import router as ws_router
 
 # Configure logging
 logging.basicConfig(
@@ -17,6 +22,8 @@ app = FastAPI(
     description="Backend API for ReplyOne Multi-Tenant AI Customer Support Aggregator"
 )
 
+api_app = app # Alias to prevent shadowing from 'app' package imports
+
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
@@ -30,9 +37,21 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(webhooks.router, prefix="/webhooks", tags=["Webhooks"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
+app.include_router(ws_router, tags=["WebSocket"])
+
+from fastapi.staticfiles import StaticFiles
+import os
+
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(static_dir, exist_ok=True)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.on_event("startup")
 async def on_startup():
+    # Initialize Redis check
+    from app.core.websocket import init_redis
+    await init_redis()
+
     logger.info("Running database startup checks...")
     try:
         from app.db.session import engine, Base
@@ -43,6 +62,22 @@ async def on_startup():
         logger.info("Database tables initialized successfully.")
     except Exception as e:
         logger.critical(f"Database startup failed: {e}", exc_info=True)
+
+    # Start Redis Pub/Sub listener
+    logger.info("Starting Redis Pub/Sub listener...")
+    from app.core.websocket import redis_pubsub_listener
+    api_app.state.redis_listener = asyncio.create_task(redis_pubsub_listener())
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    logger.info("Shutting down background tasks...")
+    if hasattr(api_app.state, "redis_listener"):
+        api_app.state.redis_listener.cancel()
+        try:
+            await api_app.state.redis_listener
+        except asyncio.CancelledError:
+            logger.info("Redis Pub/Sub listener successfully stopped.")
+
 
 @app.get("/health")
 def health_check():

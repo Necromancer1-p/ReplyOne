@@ -28,9 +28,24 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     let errorMsg = 'An error occurred';
     try {
       const errData = await response.json();
-      errorMsg = errData.detail || errorMsg;
+      if (errData && errData.detail) {
+        if (Array.isArray(errData.detail)) {
+          errorMsg = errData.detail.map((err: any) => {
+            const field = err.loc ? err.loc[err.loc.length - 1] : '';
+            return `${field ? field + ': ' : ''}${err.msg}`;
+          }).join(', ');
+        } else if (typeof errData.detail === 'string') {
+          errorMsg = errData.detail;
+        } else {
+          errorMsg = JSON.stringify(errData.detail);
+        }
+      }
     } catch {
-      errorMsg = await response.text() || errorMsg;
+      try {
+        errorMsg = await response.text() || errorMsg;
+      } catch {
+        // fallback
+      }
     }
     throw new Error(errorMsg);
   }

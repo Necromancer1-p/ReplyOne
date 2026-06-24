@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ReplyOne Customer Chat</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --deep-navy: #0D1B2A;
+      --electric-blue: #1E6FE8;
+      --cyber-teal: #00C8B4;
+      --soft-slate: #4A5568;
+      --cloud-white: #F7F9FC;
+      --bg-white: #FFFFFF;
+      --alert-red: #EF4444;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--cloud-white);
+      color: var(--deep-navy);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* 1. Header */
+    .chat-header {
+      background: linear-gradient(135deg, var(--deep-navy) 0%, #1A2940 100%);
+      color: #ffffff;
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      shrink-0: 0;
+    }
+    .shop-profile {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .shop-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: var(--cyber-teal);
+      border: 1.5px solid var(--cyber-teal);
+      text-transform: uppercase;
+      font-size: 14px;
+    }
+    .shop-details h3 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .shop-status {
+      font-size: 10px;
+      color: #94A3B8;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 2px;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      background-color: var(--cyber-teal);
+      border-radius: 50%;
+      display: inline-block;
+      box-shadow: 0 0 8px var(--cyber-teal);
+    }
+    .close-btn {
+      background: none;
+      border: none;
+      color: #94A3B8;
+      cursor: pointer;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.2s;
+    }
+    .close-btn:hover {
+      color: #ffffff;
+    }
+
+    /* 2. Messages Box */
+    .chat-messages {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: var(--cloud-white);
+    }
+    .message-row {
+      display: flex;
+      width: 100%;
+    }
+    .message-row.customer {
+      justify-content: flex-end;
+    }
+    .message-row.other {
+      justify-content: flex-start;
+    }
+    .bubble {
+      max-width: 80%;
+      padding: 10px 14px;
+      font-size: 13.5px;
+      line-height: 1.5;
+      position: relative;
+    }
+    .customer .bubble {
+      background: linear-gradient(135deg, var(--electric-blue) 0%, #6366F1 100%);
+      color: #ffffff;
+      border-radius: 14px 14px 2px 14px;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.18);
+    }
+    .other .bubble {
+      background: var(--bg-white);
+      color: var(--deep-navy);
+      border-radius: 14px 14px 14px 2px;
+      box-shadow: 0 2px 6px rgba(45, 63, 86, 0.05);
+      border: 1px solid rgba(45, 63, 86, 0.06);
+    }
+    .sender-tag {
+      font-size: 9px;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--soft-slate);
+      margin-bottom: 3px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .ai-badge {
+      background: rgba(0, 200, 180, 0.12);
+      color: #048a7d;
+      padding: 1px 4px;
+      border-radius: 4px;
+      font-size: 8px;
+    }
+    .message-time {
+      font-size: 9px;
+      color: #94A3B8;
+      align-self: flex-end;
+      margin-top: 4px;
+      text-align: right;
+    }
+
+    /* 3. Composer Footer */
+    .chat-footer {
+      background: var(--bg-white);
+      padding: 12px;
+      border-top: 1px solid rgba(45, 63, 86, 0.08);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      shrink-0: 0;
+    }
+    .input-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .chat-input {
+      flex: 1;
+      height: 40px;
+      border-radius: 20px;
+      border: 1px solid rgba(45, 63, 86, 0.15);
+      padding: 0 16px;
+      font-size: 13px;
+      background: var(--cloud-white);
+      color: var(--deep-navy);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .chat-input:focus {
+      border-color: var(--electric-blue);
+      background: #ffffff;
+    }
+    .send-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--electric-blue);
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(30, 111, 232, 0.3);
+      transition: all 0.2s;
+      outline: none;
+    }
+    .send-btn:hover {
+      background: #175ec7;
+      transform: scale(1.04);
+    }
+    .send-btn:active {
+      transform: scale(0.96);
+    }
+    .send-btn:disabled {
+      background: #CBD5E1;
+      box-shadow: none;
+      cursor: not-allowed;
+    }
+    .send-btn svg {
+      width: 16px;
+      height: 16px;
+      fill: none;
+      stroke: #ffffff;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .branding {
+      font-size: 9px;
+      color: #94A3B8;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+    }
+    .branding strong {
+      color: var(--electric-blue);
+      font-weight: 600;
+    }
+
+    /* Loading placeholder */
+    .loader {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--soft-slate);
+      gap: 8px;
+      font-size: 13px;
+    }
+    .spinner {
+      border: 3px solid rgba(30, 111, 232, 0.1);
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border-left-color: var(--electric-blue);
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Chat Widget Header -->
+  <div class="chat-header">
+    <div class="shop-profile">
+      <div id="shop-avatar" class="shop-avatar">-</div>
+      <div class="shop-details">
+        <h3 id="shop-name">Store Support</h3>
+        <div class="shop-status">
+          <span class="status-dot"></span>
+          <span>AI Assistant Online</span>
+        </div>
+      </div>
+    </div>
+    <button id="close-btn" class="close-btn" aria-label="Close chat">
+      <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="18" y1="6" x2="6" y2="18"></line>
+        <line x1="6" y1="6" x2="18" y2="18"></line>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Messages List -->
+  <div id="chat-messages" class="chat-messages">
+    <div class="loader">
+      <div class="spinner"></div>
+      <p>Initializing secure chat...</p>
+    </div>
+  </div>
+
+  <!-- Input Footer -->
+  <div class="chat-footer">
+    <form id="chat-form" class="input-row">
+      <input 
+        type="text" 
+        id="chat-input" 
+        class="chat-input" 
+        placeholder="Type a message..." 
+        autocomplete="off" 
+        disabled
+      />
+      <button type="submit" id="send-btn" class="send-btn" disabled>
+        <svg viewBox="0 0 24 24">
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+      </button>
+    </form>
+    <div class="branding">
+      Powered by <strong>ReplyOne AI</strong>
+    </div>
+  </div>
+
+  <script>
+    // 1. Parse URL parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    const tenantSlug = urlParams.get('tenant');
+    const sessionId = urlParams.get('session');
+
+    const API_BASE = window.location.origin;
+    let tenantId = null;
+    let socket = null;
+
+    const chatMessages = document.getElementById('chat-messages');
+    const chatInput = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('send-btn');
+    const shopName = document.getElementById('shop-name');
+    const shopAvatar = document.getElementById('shop-avatar');
+    const closeBtn = document.getElementById('close-btn');
+
+    // Handle close button click (sends postMessage to widget.js parent)
+    closeBtn.addEventListener('click', () => {
+      window.parent.postMessage('replyone-close', '*');
+    });
+
+    // Helper to format time
+    function formatTime(isoStr) {
+      if (!isoStr) return '';
+      const date = new Date(isoStr);
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Scroll chat area to bottom
+    function scrollToBottom() {
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    // Render message item
+    function appendMessage(msg, prepend = false) {
+      const isCustomer = msg.direction === 'inbound';
+      const row = document.createElement('div');
+      row.className = `message-row ${isCustomer ? 'customer' : 'other'}`;
+      
+      let tag = '';
+      if (!isCustomer) {
+        tag = msg.sender_type === 'ai' 
+          ? `<div class="sender-tag"><span class="ai-badge">🤖 AI Auto-reply</span></div>`
+          : `<div class="sender-tag">👤 Support Agent</div>`;
+      }
+
+      row.innerHTML = `
+        <div class="bubble">
+          ${tag}
+          <div>${msg.content}</div>
+          <div class="message-time">${formatTime(msg.created_at || new Date().toISOString())}</div>
+        </div>
+      `;
+
+      if (prepend) {
+        chatMessages.insertBefore(row, chatMessages.firstChild);
+      } else {
+        chatMessages.appendChild(row);
+      }
+    }
+
+    // Load shop information
+    async function loadShopInfo() {
+      try {
+        const response = await fetch(`${API_BASE}/webhooks/widget/${tenantSlug}/shop-info`);
+        if (!response.ok) throw new Error('Failed to load shop details');
+        const data = await response.json();
+        
+        // Setup Header Details
+        shopName.textContent = data.name;
+        shopAvatar.textContent = data.name.charAt(0);
+      } catch (err) {
+        console.error(err);
+        shopName.textContent = 'Support Chat';
+        shopAvatar.textContent = 'S';
+      }
+    }
+
+    // Load existing history
+    async function loadHistory() {
+      try {
+        const response = await fetch(`${API_BASE}/webhooks/widget/${tenantSlug}/history?session_id=${sessionId}`);
+        if (!response.ok) throw new Error('Failed to load history');
+        const messages = await response.json();
+        
+        chatMessages.innerHTML = '';
+        if (messages.length === 0) {
+          // Welcome greeting
+          const welcomeRow = document.createElement('div');
+          welcomeRow.className = 'loader';
+          welcomeRow.style.height = 'auto';
+          welcomeRow.style.padding = '24px 0';
+          welcomeRow.innerHTML = `
+            <p style="font-weight:600; color:var(--deep-navy);">👋 Welcome to our live support!</p>
+            <p style="font-size:11px; text-align:center; max-width:80%;">Send a message below and our AI Assistant or a team member will assist you shortly.</p>
+          `;
+          chatMessages.appendChild(welcomeRow);
+        } else {
+          messages.forEach(msg => appendMessage(msg));
+        }
+        
+        // Enable input fields
+        chatInput.disabled = false;
+        sendBtn.disabled = false;
+        scrollToBottom();
+      } catch (err) {
+        console.error(err);
+        chatMessages.innerHTML = '<p style="text-align:center; padding:20px; color:var(--alert-red);">Error loading chat. Please refresh page.</p>';
+      }
+    }
+
+    // Connect to WebSocket
+    function connectWebSocket() {
+      fetch(`${API_BASE}/webhooks/widget/${tenantSlug}/shop-info`)
+        .then(r => r.json())
+        .then(info => {
+          const tenantId = info.id || 1;
+          
+          const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const wsUrl = `${wsProto}//${window.location.host}/ws?session_id=${sessionId}&tenant_id=${tenantId}`;
+          
+          console.log('Connecting to WebSocket:', wsUrl);
+          socket = new WebSocket(wsUrl);
+          
+          socket.onmessage = (event) => {
+            try {
+              const payload = JSON.parse(event.data);
+              const { type, data } = payload;
+              
+              if (type === 'message_created') {
+                // If it is outbound (meaning from AI or Agent), append to window
+                if (data.direction === 'outbound') {
+                  appendMessage(data);
+                  scrollToBottom();
+                }
+              }
+            } catch (err) {
+              console.error('Error parsing WS message:', err);
+            }
+          };
+          
+          socket.onclose = () => {
+            console.log('WebSocket closed. Reconnecting in 3s...');
+            setTimeout(connectWebSocket, 3000);
+          };
+        })
+        .catch(err => {
+          console.error('WS Setup failed, trying again:', err);
+          setTimeout(connectWebSocket, 3000);
+        });
+    }
+
+    // Submit Message
+    document.getElementById('chat-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = chatInput.value.trim();
+      if (!text) return;
+      
+      // Clear input immediately for snappy feel
+      chatInput.value = '';
+      
+      // Instantly append local message bubble
+      const localMsg = {
+        direction: 'inbound',
+        sender_type: 'customer',
+        content: text,
+        created_at: new Date().toISOString()
+      };
+      
+      // If welcoming message was there, clean it
+      const welcomes = chatMessages.querySelectorAll('.loader');
+      welcomes.forEach(w => {
+        if (w.querySelector('.spinner') === null) {
+          w.remove();
+        }
+      });
+
+      appendMessage(localMsg);
+      scrollToBottom();
+
+      try {
+        const response = await fetch(`${API_BASE}/webhooks/widget/${tenantSlug}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            external_user_id: sessionId,
+            display_name: 'Web Visitor',
+            content: text
+          })
+        });
+        
+        if (!response.ok) throw new Error('Send failed');
+      } catch (err) {
+        console.error(err);
+        // Display retry warning or mark message bubble
+        const errorRow = document.createElement('div');
+        errorRow.style.color = 'var(--alert-red)';
+        errorRow.style.fontSize = '10px';
+        errorRow.style.textAlign = 'right';
+        errorRow.style.paddingRight = '16px';
+        errorRow.textContent = '⚠️ Message delivery failed.';
+        chatMessages.appendChild(errorRow);
+        scrollToBottom();
+      }
+    });
+
+    // Initialize Widget Chat
+    if (tenantSlug && sessionId) {
+      loadShopInfo();
+      loadHistory();
+      connectWebSocket();
+    } else {
+      chatMessages.innerHTML = '<p style="text-align:center; padding:20px; color:var(--alert-red);">Error: Invalid widget credentials</p>';
+    }
+  </script>
+</body>
+</html>

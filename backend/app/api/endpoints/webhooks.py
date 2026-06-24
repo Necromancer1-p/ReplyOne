@@ -210,3 +210,73 @@ async def widget_webhook(
 
     logger.info(f"Widget message enqueued for processing. Event ID: {event.id}")
     return {"status": "enqueued", "event_id": event.id}
+
+
+@router.get("/widget/{tenant_slug}/shop-info")
+async def widget_shop_info(tenant_slug: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Tenant).where(Tenant.slug == tenant_slug))
+    tenant = result.scalars().first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return {
+        "id": tenant.id,
+        "name": tenant.name,
+        "slug": tenant.slug,
+        "onboarding_complete": tenant.onboarding_complete,
+        "ai_enabled": tenant.ai_enabled
+    }
+
+
+@router.get("/widget/{tenant_slug}/history")
+async def widget_history(
+    tenant_slug: str,
+    session_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    # Find matching tenant
+    result = await db.execute(select(Tenant).where(Tenant.slug == tenant_slug))
+    tenant = result.scalars().first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+        
+    # Find the customer for this session_id
+    from app.models.models import Customer, Conversation, Message
+    cust_result = await db.execute(
+        select(Customer).where(
+            Customer.tenant_id == tenant.id,
+            Customer.external_user_id == str(session_id)
+        )
+    )
+    customer = cust_result.scalars().first()
+    if not customer:
+        return []
+        
+    # Find active or most recent conversation
+    conv_result = await db.execute(
+        select(Conversation).where(
+            Conversation.tenant_id == tenant.id,
+            Conversation.customer_id == customer.id
+        ).order_by(Conversation.id.desc()).limit(1)
+    )
+    conversation = conv_result.scalars().first()
+    if not conversation:
+        return []
+        
+    # Get all messages in this conversation
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.conversation_id == conversation.id
+        ).order_by(Message.created_at.asc())
+    )
+    messages = msg_result.scalars().all()
+    
+    return [
+        {
+            "id": m.id,
+            "direction": m.direction,
+            "sender_type": m.sender_type,
+            "content": m.content,
+            "created_at": m.created_at.isoformat() if m.created_at else None
+        }
+        for m in messages
+    ]

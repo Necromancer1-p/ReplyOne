@@ -27,7 +27,11 @@ def infer(req: InferRequest):
     msg_lower = req.user_message.lower()
     
     # Simple rule-based intent classification
-    if any(k in msg_lower for k in ["order", "status", "track", "delivery", "where is my"]):
+    if any(k in msg_lower for k in ["complain", "bad", "angry", "worst", "broken", "defect", "hate", "terrible", "delay"]):
+        intent = "complaint"
+        confidence = 0.98
+        reply = "I am very sorry to hear about your experience. Let me connect you to a human agent immediately to get this resolved."
+    elif any(k in msg_lower for k in ["order", "status", "track", "delivery", "where is my"]):
         intent = "order_status"
         confidence = 0.92
         reply = "I'd be happy to check your order status. Could you please share your Order ID?"
@@ -43,10 +47,6 @@ def infer(req: InferRequest):
         intent = "availability"
         confidence = 0.85
         reply = "I'm checking the stock for that. Which size or color are you looking for?"
-    elif any(k in msg_lower for k in ["complain", "bad", "angry", "worst", "broken", "defect", "hate", "terrible", "delay"]):
-        intent = "complaint"
-        confidence = 0.98
-        reply = "I am very sorry to hear about your experience. Let me connect you to a human agent immediately to get this resolved."
     elif any(k in msg_lower for k in ["hi", "hello", "hey", "greetings"]):
         intent = "greeting"
         confidence = 0.99
