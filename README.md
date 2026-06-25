@@ -4,6 +4,29 @@ ReplyOne is a next-generation, enterprise-ready multi-tenant customer support ag
 
 ---
 
+## Table of Contents
+
+<!-- toc -->
+
+- [✨ Features](#%E2%9C%A8-features)
+- [🏗️ System Architecture](#%F0%9F%8F%97%EF%B8%8F-system-architecture)
+  * [Tech Stack Details](#tech-stack-details)
+- [📁 Repository Structure](#%F0%9F%93%81-repository-structure)
+- [🚀 Getting Started](#%F0%9F%9A%80-getting-started)
+  * [Prerequisites](#prerequisites)
+  * [Method A: Quickstart via Docker Compose (Recommended)](#method-a-quickstart-via-docker-compose-recommended)
+    + [Exposed Endpoints:](#exposed-endpoints)
+  * [Method B: Local Development Setup](#method-b-local-development-setup)
+    + [1. Setup Backend](#1-setup-backend)
+    + [2. Setup Mock AI Service](#2-setup-mock-ai-service)
+    + [3. Setup Frontend](#3-setup-frontend)
+- [🔒 Security & Encryption](#%F0%9F%94%92-security--encryption)
+- [🧪 Running Tests](#%F0%9F%A7%AA-running-tests)
+
+<!-- tocstop -->
+
+---
+
 ## ✨ Features
 
 - **🛡️ Robust Multi-Tenancy**: Complete isolation of configurations, user rosters (`owner`, `agent`, `viewer`), customers, products, and chat transcripts per tenant.
@@ -167,3 +190,20 @@ docker compose down
 - **Double-Envelope Webhook Protection**: Channels encrypt external credentials dynamically using 256-bit AES symmetric keys configured on the host server.
 - **Multi-Tenant Scoping**: Every database transaction is scoped at the query level using `tenant_id` validation.
 - **JWT Authorization**: User authentication utilizes secure JSON Web Tokens with auto-rotating sessions.
+
+---
+
+## 🧪 Running Tests
+
+To run the backend tests locally, you need to navigate to the `backend/` directory and install the required test dependencies:
+
+```bash
+cd backend
+pip install pytest httpx pytest-asyncio
+```
+
+Then, you can run the test suite using `pytest`:
+
+```bash
+pytest test_api.py test_dashboard.py test_webhooks.py
+```
